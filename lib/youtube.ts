@@ -23,7 +23,7 @@ let innertube: Promise<Innertube> | undefined;
 // ponytail: npm layout; use `require('ffmpeg-static')` if the binary moves (pnpm).
 const ffmpegBin = path.join(process.cwd(), "node_modules/ffmpeg-static/ffmpeg");
 
-const CLIENTS = ["TV", "IOS", "ANDROID"] as const;
+const CLIENTS = ["IOS", "ANDROID_VR", "WEB_EMBEDDED"] as const;
 
 function ytClient(): Promise<Innertube> {
   innertube ??= (async () => {
@@ -40,7 +40,7 @@ function ytClient(): Promise<Innertube> {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         throw new YoutubeError(
-          `YOUTUBE_OAUTH sign-in failed (${msg}). Re-run npm run youtube:login and paste the full JSON, not just the access token.`,
+          `YOUTUBE_OAUTH sign-in failed (${msg}). Re-run npm run youtube:login and paste the full JSON (refresh_token included).`,
           401,
         );
       }
@@ -190,8 +190,9 @@ function mux(videoUrl: string, audioUrl: string, container: string): ReadableStr
 
 async function getPlayableInfo(videoId: string) {
   const yt = await ytClient();
-  let last: YoutubeError | undefined;
-  for (const client of CLIENTS) {
+  const clients = yt.session.logged_in ? (["TV", ...CLIENTS] as const) : CLIENTS;
+  const failures: string[] = [];
+  for (const client of clients) {
     try {
       const info = await timed(yt.getBasicInfo(videoId, { client }));
       const status = info.playability_status?.status;
@@ -200,13 +201,17 @@ async function getPlayableInfo(videoId: string) {
         ...(info.streaming_data?.adaptive_formats ?? []),
       ];
       if (raw.some((f) => f.url) && (!status || status === "OK")) return info;
-      last = mapPlayability(status || "UNPLAYABLE", info.playability_status?.reason);
+      const why = status && status !== "OK"
+        ? `${client}:${status} ${info.playability_status?.reason || ""}`.trim()
+        : `${client}:no stream urls`;
+      failures.push(why);
     } catch (err) {
-      if (err instanceof YoutubeError) last = err;
-      else last = mapExtractError(err);
+      if (err instanceof YoutubeError && err.status === 504) throw err;
+      const msg = err instanceof Error ? err.message : String(err);
+      failures.push(`${client}:${msg.slice(0, 120)}`);
     }
   }
-  throw last ?? new YoutubeError("Could not extract video info. YouTube may be blocking this IP.", 502);
+  throw mapExtractError(new Error(failures.join(" | ") || "no clients"));
 }
 
 export function mapPlayability(status: string, reason?: string): YoutubeError {
@@ -233,11 +238,14 @@ function mapExtractError(err: unknown): YoutubeError {
   const msg = err instanceof Error ? err.message : String(err);
   const lower = msg.toLowerCase();
   if (lower.includes("private")) return new YoutubeError("This video is private.", 403);
-  if (lower.includes("age") || lower.includes("sign in") || lower.includes("bot") || lower.includes("login")) {
+  if (lower.includes("age") || lower.includes("sign in") || lower.includes("bot") || lower.includes("login_required")) {
     return mapPlayability("LOGIN_REQUIRED", msg);
   }
   if (lower.includes("unavailable") || lower.includes("not exist")) {
     return new YoutubeError("Video is unavailable.", 404);
   }
-  return new YoutubeError("Could not extract video info. YouTube may be blocking this IP.", 502);
+  return new YoutubeError(
+    `Could not extract video info (${msg.slice(0, 280)}). Vercel IPs are often fully blocked — run locally, or put a residential proxy in front.`,
+    502,
+  );
 }

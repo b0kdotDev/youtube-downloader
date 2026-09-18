@@ -35,6 +35,9 @@ export async function POST(req: Request) {
     if (err instanceof YoutubeError) {
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    return NextResponse.json({ error: "Unexpected extraction error." }, { status: 500 });
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message.slice(0, 300) : "Unexpected extraction error." },
+      { status: 500 },
+    );
   }
 }
