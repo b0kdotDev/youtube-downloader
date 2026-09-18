@@ -26,14 +26,17 @@ const ffmpegBin = path.join(process.cwd(), "node_modules/ffmpeg-static/ffmpeg");
 const CLIENTS = ["IOS", "ANDROID"] as const;
 
 function ytClient(): Promise<Innertube> {
-  innertube ??= Innertube.create({
-    cookie: config.youtubeCookie,
-    po_token: config.youtubePoToken,
-    visitor_data: config.youtubeVisitorData,
-    generate_session_locally: true,
-    // iOS/TV urls are already signed; skip player JS scrape (slow + blocked on Vercel).
-    retrieve_player: false,
-  });
+  innertube ??= (async () => {
+    const yt = await Innertube.create({
+      cookie: config.youtubeCookie,
+      po_token: config.youtubePoToken,
+      visitor_data: config.youtubeVisitorData,
+      generate_session_locally: true,
+      retrieve_player: false,
+    });
+    if (config.youtubeOauth) await yt.session.signIn(config.youtubeOauth);
+    return yt;
+  })();
   return innertube;
 }
 
@@ -199,13 +202,14 @@ async function getPlayableInfo(videoId: string) {
 export function mapPlayability(status: string, reason?: string): YoutubeError {
   const r = (reason || status).toLowerCase();
   if (r.includes("age")) {
-    return new YoutubeError("Age-restricted video. A logged-in YOUTUBE_COOKIE is required.", 403);
+    return new YoutubeError("Age-restricted video. Sign in: npm run youtube:login, then set YOUTUBE_OAUTH.", 403);
   }
   if (status === "LOGIN_REQUIRED" || r.includes("sign in") || r.includes("bot")) {
+    const hasAuth = Boolean(config.youtubeCookie || config.youtubeOauth);
     return new YoutubeError(
-      config.youtubeCookie
-        ? "YouTube rejected the session. YOUTUBE_COOKIE is expired or missing CONSENT/LOGIN tokens."
-        : "YouTube blocked this server IP (normal on Vercel). Set YOUTUBE_COOKIE to the Cookie header from a logged-in youtube.com tab.",
+      hasAuth
+        ? "YouTube rejected the session. Re-run npm run youtube:login and update YOUTUBE_OAUTH (or YOUTUBE_COOKIE)."
+        : "YouTube blocked this server IP (normal on Vercel). Run npm run youtube:login and set YOUTUBE_OAUTH.",
       403,
     );
   }

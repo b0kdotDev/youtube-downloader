@@ -13,7 +13,28 @@ export const config = {
   youtubeCookie: process.env.YOUTUBE_COOKIE?.trim() || undefined,
   youtubePoToken: process.env.YOUTUBE_PO_TOKEN?.trim() || undefined,
   youtubeVisitorData: process.env.YOUTUBE_VISITOR_DATA?.trim() || undefined,
+  youtubeOauth: parseOauth(process.env.YOUTUBE_OAUTH),
 };
+
+export type YoutubeOauth = {
+  access_token: string;
+  refresh_token: string;
+  expiry_date: string;
+  client?: { client_id: string; client_secret: string };
+};
+
+function parseOauth(raw?: string): YoutubeOauth | undefined {
+  if (!raw?.trim()) return undefined;
+  try {
+    const t = JSON.parse(raw) as Partial<YoutubeOauth>;
+    if (t.access_token && t.refresh_token && t.expiry_date) {
+      return t as YoutubeOauth;
+    }
+  } catch {
+    /* ignore */
+  }
+  return undefined;
+}
 
 /** ponytail: in-memory Map, Redis if you run more than one Node process. */
 const hits = new Map<string, number[]>();
