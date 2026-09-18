@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import { Innertube } from "youtubei.js";
 import { config } from "./config";
 import { pickFormats } from "./formats";
+import { isAgeGate, isBotWall } from "./playability";
 import type { VideoFormatOption, VideoMetadata } from "./types";
 
 export class YoutubeError extends Error {
@@ -216,10 +217,10 @@ async function getPlayableInfo(videoId: string) {
 
 export function mapPlayability(status: string, reason?: string): YoutubeError {
   const r = (reason || status).toLowerCase();
-  if (r.includes("age")) {
+  if (isAgeGate(r)) {
     return new YoutubeError("Age-restricted video. Sign in: npm run youtube:login, then set YOUTUBE_OAUTH.", 403);
   }
-  if (status === "LOGIN_REQUIRED" || r.includes("sign in") || r.includes("bot")) {
+  if (status === "LOGIN_REQUIRED" || r.includes("sign in") || isBotWall(r)) {
     const hasAuth = Boolean(config.youtubeCookie || config.youtubeOauth);
     return new YoutubeError(
       hasAuth
@@ -238,7 +239,8 @@ function mapExtractError(err: unknown): YoutubeError {
   const msg = err instanceof Error ? err.message : String(err);
   const lower = msg.toLowerCase();
   if (lower.includes("private")) return new YoutubeError("This video is private.", 403);
-  if (lower.includes("age") || lower.includes("sign in") || lower.includes("bot") || lower.includes("login_required")) {
+  if (isAgeGate(lower)) return mapPlayability("UNPLAYABLE", msg);
+  if (lower.includes("sign in") || isBotWall(lower) || lower.includes("login_required")) {
     return mapPlayability("LOGIN_REQUIRED", msg);
   }
   if (lower.includes("unavailable") || lower.includes("not exist")) {
