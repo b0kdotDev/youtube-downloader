@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import { Innertube } from "youtubei.js";
 import { config } from "./config";
 import { pickFormats } from "./formats";
-import { isAgeGate, isBotWall } from "./playability";
+import { isAgeGate, isBotWall, isPlayerBlocked } from "./playability";
 import type { VideoFormatOption, VideoMetadata } from "./types";
 
 export class YoutubeError extends Error {
@@ -236,11 +236,10 @@ export function mapPlayability(status: string, reason?: string): YoutubeError {
     return new YoutubeError("Age-restricted video. Sign in: npm run youtube:login, then set YOUTUBE_OAUTH.", 403);
   }
   if (status === "LOGIN_REQUIRED" || r.includes("sign in") || isBotWall(r)) {
-    const hasAuth = Boolean(config.youtubeCookie || config.youtubeOauth);
     return new YoutubeError(
-      hasAuth
-        ? "YouTube rejected the session. Re-run npm run youtube:login and update YOUTUBE_OAUTH (or YOUTUBE_COOKIE)."
-        : "YouTube blocked this server IP (normal on Vercel). Run npm run youtube:login and set YOUTUBE_OAUTH.",
+      config.youtubeCookie || config.youtubeOauth
+        ? "YouTube still blocked the player (OAuth is already loaded). This host IP is the problem — run `npm run dev` locally, not on Vercel."
+        : "YouTube blocked this server IP. Run `npm run youtube:login` only if you are on your own machine; it will not unblock Vercel.",
       403,
     );
   }
@@ -253,6 +252,12 @@ export function mapPlayability(status: string, reason?: string): YoutubeError {
 function mapExtractError(err: unknown): YoutubeError {
   const msg = err instanceof Error ? err.message : String(err);
   const lower = msg.toLowerCase();
+  if (isPlayerBlocked(lower)) {
+    return new YoutubeError(
+      "YouTube blocks Vercel/datacenter IPs. New OAuth JSON will not change that. Run `npm run dev` on your computer to download.",
+      502,
+    );
+  }
   if (lower.includes("private")) return new YoutubeError("This video is private.", 403);
   if (isAgeGate(lower)) return mapPlayability("UNPLAYABLE", msg);
   if (lower.includes("sign in") || isBotWall(lower) || lower.includes("login_required")) {
@@ -262,7 +267,7 @@ function mapExtractError(err: unknown): YoutubeError {
     return new YoutubeError("Video is unavailable.", 404);
   }
   return new YoutubeError(
-    `Could not extract video info (${msg.slice(0, 280)}). Vercel IPs are often fully blocked — run locally, or put a residential proxy in front.`,
+    `Could not extract video info (${msg.slice(0, 280)}).`,
     502,
   );
 }
