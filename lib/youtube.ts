@@ -23,7 +23,7 @@ let innertube: Promise<Innertube> | undefined;
 // ponytail: npm layout; use `require('ffmpeg-static')` if the binary moves (pnpm).
 const ffmpegBin = path.join(process.cwd(), "node_modules/ffmpeg-static/ffmpeg");
 
-const CLIENTS = ["IOS", "ANDROID"] as const;
+const CLIENTS = ["TV", "IOS", "ANDROID"] as const;
 
 function ytClient(): Promise<Innertube> {
   innertube ??= (async () => {
@@ -34,7 +34,17 @@ function ytClient(): Promise<Innertube> {
       generate_session_locally: true,
       retrieve_player: false,
     });
-    if (config.youtubeOauth) await yt.session.signIn(config.youtubeOauth);
+    if (config.youtubeOauth) {
+      try {
+        await yt.session.signIn(config.youtubeOauth);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new YoutubeError(
+          `YOUTUBE_OAUTH sign-in failed (${msg}). Re-run npm run youtube:login and paste the full JSON, not just the access token.`,
+          401,
+        );
+      }
+    }
     return yt;
   })();
   return innertube;

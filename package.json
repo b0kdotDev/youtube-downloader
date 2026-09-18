@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-strip-types lib/url.test.ts && node --experimental-strip-types lib/formats.test.ts",
+    "test": "node --experimental-strip-types lib/url.test.ts && node --experimental-strip-types lib/formats.test.ts && node --experimental-strip-types lib/oauth.test.ts",
     "youtube:login": "node --experimental-strip-types scripts/youtube-login.ts"
   },
   "dependencies": {
