@@ -23,17 +23,27 @@ let innertube: Promise<Innertube> | undefined;
 // ponytail: npm layout; use `require('ffmpeg-static')` if the binary moves (pnpm).
 const ffmpegBin = path.join(process.cwd(), "node_modules/ffmpeg-static/ffmpeg");
 
+const CLIENTS = ["IOS", "ANDROID"] as const;
+
 function ytClient(): Promise<Innertube> {
-  innertube ??= Innertube.create();
+  innertube ??= Innertube.create({
+    cookie: config.youtubeCookie,
+    po_token: config.youtubePoToken,
+    visitor_data: config.youtubeVisitorData,
+    generate_session_locally: true,
+    // iOS/TV urls are already signed; skip player JS scrape (slow + blocked on Vercel).
+    retrieve_player: false,
+  });
   return innertube;
 }
 
-const MEDIA_HEADERS = {
+const MEDIA_HEADERS: Record<string, string> = {
   accept: "*/*",
   origin: "https://www.youtube.com",
   referer: "https://www.youtube.com",
   "user-agent":
     "com.google.ios.youtube/20.11.6 (iPhone10,4; U; CPU iOS 16_7_7 like Mac OS X)",
+  ...(config.youtubeCookie ? { cookie: config.youtubeCookie } : {}),
 };
 
 async function timed<T>(p: Promise<T>): Promise<T> {
@@ -49,18 +59,7 @@ async function timed<T>(p: Promise<T>): Promise<T> {
 }
 
 export async function fetchVideo(videoId: string) {
-  let info: Awaited<ReturnType<Innertube["getBasicInfo"]>>;
-  try {
-    info = await timed((await ytClient()).getBasicInfo(videoId, { client: "IOS" }));
-  } catch (err) {
-    if (err instanceof YoutubeError) throw err;
-    throw mapExtractError(err);
-  }
-
-  const status = info.playability_status?.status;
-  if (status && status !== "OK") {
-    throw mapPlayability(status, info.playability_status?.reason);
-  }
+  const info = await getPlayableInfo(videoId);
 
   const d = info.basic_info;
   if (d.is_private) throw new YoutubeError("This video is private.", 403);
@@ -176,10 +175,39 @@ function mux(videoUrl: string, audioUrl: string, container: string): ReadableStr
   return Readable.toWeb(ff.stdout) as ReadableStream<Uint8Array>;
 }
 
-function mapPlayability(status: string, reason?: string): YoutubeError {
+async function getPlayableInfo(videoId: string) {
+  const yt = await ytClient();
+  let last: YoutubeError | undefined;
+  for (const client of CLIENTS) {
+    try {
+      const info = await timed(yt.getBasicInfo(videoId, { client }));
+      const status = info.playability_status?.status;
+      const raw = [
+        ...(info.streaming_data?.formats ?? []),
+        ...(info.streaming_data?.adaptive_formats ?? []),
+      ];
+      if (raw.some((f) => f.url) && (!status || status === "OK")) return info;
+      last = mapPlayability(status || "UNPLAYABLE", info.playability_status?.reason);
+    } catch (err) {
+      if (err instanceof YoutubeError) last = err;
+      else last = mapExtractError(err);
+    }
+  }
+  throw last ?? new YoutubeError("Could not extract video info. YouTube may be blocking this IP.", 502);
+}
+
+export function mapPlayability(status: string, reason?: string): YoutubeError {
   const r = (reason || status).toLowerCase();
-  if (status === "LOGIN_REQUIRED" || r.includes("sign in") || r.includes("age")) {
-    return new YoutubeError("Age-restricted or login-walled video.", 403);
+  if (r.includes("age")) {
+    return new YoutubeError("Age-restricted video. A logged-in YOUTUBE_COOKIE is required.", 403);
+  }
+  if (status === "LOGIN_REQUIRED" || r.includes("sign in") || r.includes("bot")) {
+    return new YoutubeError(
+      config.youtubeCookie
+        ? "YouTube rejected the session. YOUTUBE_COOKIE is expired or missing CONSENT/LOGIN tokens."
+        : "YouTube blocked this server IP (normal on Vercel). Set YOUTUBE_COOKIE to the Cookie header from a logged-in youtube.com tab.",
+      403,
+    );
   }
   if (status === "UNPLAYABLE" || r.includes("private")) {
     return new YoutubeError(reason || "This video is unavailable.", r.includes("private") ? 403 : 404);
@@ -191,8 +219,8 @@ function mapExtractError(err: unknown): YoutubeError {
   const msg = err instanceof Error ? err.message : String(err);
   const lower = msg.toLowerCase();
   if (lower.includes("private")) return new YoutubeError("This video is private.", 403);
-  if (lower.includes("age") || lower.includes("sign in")) {
-    return new YoutubeError("Age-restricted or login-walled video.", 403);
+  if (lower.includes("age") || lower.includes("sign in") || lower.includes("bot") || lower.includes("login")) {
+    return mapPlayability("LOGIN_REQUIRED", msg);
   }
   if (lower.includes("unavailable") || lower.includes("not exist")) {
     return new YoutubeError("Video is unavailable.", 404);

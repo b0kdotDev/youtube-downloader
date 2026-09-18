@@ -9,6 +9,10 @@ export const config = {
   rateLimitWindowMs: num("RATE_LIMIT_WINDOW_MS", 60_000),
   /** Abort player/info fetch if YouTube hangs (signature scrape + player JSON). */
   ytdlTimeoutMs: num("YTDL_TIMEOUT_MS", 20_000),
+  /** Cookie header from a logged-in youtube.com tab. Datacenter IPs (Vercel) need this. */
+  youtubeCookie: process.env.YOUTUBE_COOKIE?.trim() || undefined,
+  youtubePoToken: process.env.YOUTUBE_PO_TOKEN?.trim() || undefined,
+  youtubeVisitorData: process.env.YOUTUBE_VISITOR_DATA?.trim() || undefined,
 };
 
 /** ponytail: in-memory Map, Redis if you run more than one Node process. */
