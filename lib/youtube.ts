@@ -20,35 +20,44 @@ export class YoutubeError extends Error {
  * gives googlevideo URLs already signed. Adaptive itags are video-only — we
  * mux with AAC via ffmpeg (`-c copy`) so downloads actually have sound.
  */
-let innertube: Promise<Innertube> | undefined;
+let anonSession: Promise<Innertube> | undefined;
+let tvSession: Promise<Innertube> | undefined;
 // ponytail: npm layout; use `require('ffmpeg-static')` if the binary moves (pnpm).
 const ffmpegBin = path.join(process.cwd(), "node_modules/ffmpeg-static/ffmpeg");
 
-const CLIENTS = ["IOS", "ANDROID_VR", "WEB_EMBEDDED"] as const;
+function sessionOpts() {
+  return {
+    cookie: config.youtubeCookie,
+    po_token: config.youtubePoToken,
+    visitor_data: config.youtubeVisitorData,
+    generate_session_locally: false,
+    retrieve_player: false,
+    retrieve_innertube_config: true,
+    enable_session_cache: false,
+  };
+}
 
-function ytClient(): Promise<Innertube> {
-  innertube ??= (async () => {
-    const yt = await Innertube.create({
-      cookie: config.youtubeCookie,
-      po_token: config.youtubePoToken,
-      visitor_data: config.youtubeVisitorData,
-      generate_session_locally: true,
-      retrieve_player: false,
-    });
-    if (config.youtubeOauth) {
-      try {
-        await yt.session.signIn(config.youtubeOauth);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        throw new YoutubeError(
-          `YOUTUBE_OAUTH sign-in failed (${msg}). Re-run npm run youtube:login and paste the full JSON (refresh_token included).`,
-          401,
-        );
-      }
+function anonClient(): Promise<Innertube> {
+  anonSession ??= Innertube.create(sessionOpts());
+  return anonSession;
+}
+
+function tvClient(): Promise<Innertube> {
+  tvSession ??= (async () => {
+    const yt = await Innertube.create(sessionOpts());
+    if (!config.youtubeOauth) return yt;
+    try {
+      await yt.session.signIn(config.youtubeOauth);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new YoutubeError(
+        `YOUTUBE_OAUTH sign-in failed (${msg}). Re-run npm run youtube:login and paste the full JSON.`,
+        401,
+      );
     }
     return yt;
   })();
-  return innertube;
+  return tvSession;
 }
 
 const MEDIA_HEADERS: Record<string, string> = {
@@ -190,12 +199,17 @@ function mux(videoUrl: string, audioUrl: string, container: string): ReadableStr
 }
 
 async function getPlayableInfo(videoId: string) {
-  const yt = await ytClient();
-  const clients = yt.session.logged_in ? (["TV", ...CLIENTS] as const) : CLIENTS;
+  type Client = "IOS" | "MWEB" | "TV";
+  const attempts: { client: Client; yt: () => Promise<Innertube> }[] = [
+    { client: "IOS", yt: anonClient },
+    { client: "MWEB", yt: anonClient },
+  ];
+  if (config.youtubeOauth) attempts.push({ client: "TV", yt: tvClient });
+
   const failures: string[] = [];
-  for (const client of clients) {
+  for (const { client, yt } of attempts) {
     try {
-      const info = await timed(yt.getBasicInfo(videoId, { client }));
+      const info = await timed((await yt()).getBasicInfo(videoId, { client }));
       const status = info.playability_status?.status;
       const raw = [
         ...(info.streaming_data?.formats ?? []),
@@ -208,6 +222,7 @@ async function getPlayableInfo(videoId: string) {
       failures.push(why);
     } catch (err) {
       if (err instanceof YoutubeError && err.status === 504) throw err;
+      if (err instanceof YoutubeError && err.status === 401) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       failures.push(`${client}:${msg.slice(0, 120)}`);
     }
